@@ -1,0 +1,109 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<project>
+  <actions/>
+  <description></description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>-1</daysToKeep>
+        <numToKeep>5</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>TomcatServiceName</name>
+          <description>Name of the Tomcat service that runs the IIQ application.  Used for automated service management.</description>
+          <defaultValue>SailPoint</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>App_Servers</name>
+          <description>Comma-separated list of app servers for the environment.  FQDNs preferred.</description>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>DeployUserName</name>
+          <description>Use domain account, will need to be in the format &apos;DOMAIN\Username&apos;</description>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.PasswordParameterDefinition>
+          <name>DeployUserPass</name>
+          <description>Password for the user account that will be used to perform actions on the PROD app servers</description>
+        </hudson.model.PasswordParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>ServiceOpTimeout</name>
+          <description>Timeout (in seconds) to wait for service operations to complete.</description>
+          <defaultValue>300</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <scm class="hudson.scm.NullSCM"/>
+  <canRoam>true</canRoam>
+  <disabled>false</disabled>
+  <blockBuildWhenDownstreamBuilding>false</blockBuildWhenDownstreamBuilding>
+  <blockBuildWhenUpstreamBuilding>false</blockBuildWhenUpstreamBuilding>
+  <triggers/>
+  <concurrentBuild>false</concurrentBuild>
+  <customWorkspace>workspace\PROD_Modular</customWorkspace>
+  <builders>
+    <hudson.plugins.powershell.PowerShell plugin="powershell@1.3">
+      <command>&lt;#
+ # Script to stop the IIQ app server service on the app servers
+ #&gt;
+$ErrorActionPreference = &quot;Stop&quot;
+$svcName = $env:TomcatServiceName
+$appServers = [System.Collections.ArrayList]@(($env:App_Servers).split(&quot;,&quot;))
+$remoteCreds = New-Object System.Management.Automation.PSCredential($env:DeployUserName,(ConvertTo-SecureString -String $env:DeployUserPass -AsPlainText -Force))
+# Attempt to pull custom timeout param but if it can&apos;t cast to int then fall back to a default value
+$timeout = $null
+try {
+	$timeout = [int]$env:ServiceOpTimeout
+}
+catch {
+	Write-Host ($env:ServiceOpTimeout + &quot; was not castable to an int - falling back to default 5-min timeout...&quot;)
+	$timeout = 300
+}
+# Stop the app server service on each server in the list
+foreach ($srv in $appServers) {
+  $scriptBlockStatusCheck = [Scriptblock]::Create(&quot;Get-Service -Name &apos;&quot; + $svcName + &quot;&apos;&quot;)
+  # Determine if Tomcat is running - if so, we need to attempt to stop it.  If not, no action needed.
+  $statusCheckFirst = Invoke-Command -ScriptBlock $scriptBlockStatusCheck -ComputerName $srv -Credential $remoteCreds
+  if (!(&quot;Stopped&quot;.equals($statusCheckFirst.Status))) {
+    # Initiate the Stop-Service command
+    Write-Host (&quot;Stopping service: &quot; + $svcName + &quot; on remote server: &quot; + $srv)
+    $scriptBlock = [Scriptblock]::Create(&quot;Stop-Service -Name &apos;&quot; + $svcName + &quot;&apos; -PassThru&quot;)
+    # Service info returned to the $res var for easy status checking
+    $res = Invoke-Command -ScriptBlock $scriptBlock -ComputerName $srv -Credential $remoteCreds
+    Write-Host (&quot;Result: &quot; + $res.Status)
+    # While this should wait until the service operation completes,
+    # double-check the status to be sure it&apos;s what we expect
+    # Also, use a counter kill-switch/timeout so that the loop doesn&apos;t continue indefinitely
+    $cnt = 0
+    $staus = $null
+    while((!(&quot;Stopped&quot;.equals($status))) -and ($cnt -le $timeout)) {
+      $cnt++
+	  Start-Sleep -Seconds 1
+	  $statusCheck = Invoke-Command -ScriptBlock $scriptBlockStatusCheck -ComputerName $srv -Credential $remoteCreds
+	  $status = $statusCheck.Status
+	  if ($cnt -gt $timeout) {
+		# Timeout met, terminate process and fail the build
+		throw (&quot;Error:  Could not stop process &quot; + $svcName + &quot; on server &quot; + $srv + &quot;!  Aborting deployment!&quot;)
+	  }
+	}
+    Write-Host (&quot;Service: &quot; + $svcName + &quot; on remote server: &quot; + $srv + &quot; successfully stopped.&quot;)
+  }
+  else {
+    Write-Host (&quot;Service: &quot; + $svcName + &quot; on remote server: &quot; + $srv + &quot; was already stopped.&quot;)
+  }
+}</command>
+    </hudson.plugins.powershell.PowerShell>
+  </builders>
+  <publishers/>
+  <buildWrappers/>
+</project>

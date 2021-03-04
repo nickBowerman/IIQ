@@ -1,0 +1,98 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Rule PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Rule language="beanshell" name="IdentityAttribute.IdentityType" type="IdentityAttribute">
+	<Description>Identity attribute rules are used when the value is not simply a copy of an application account attribute value.  A transformation may be necessary on the account attribute, or several account attributes may need to be combined to produce the identity attribute.
+
+This rule can be called in two ways: as a global mapping rule and an application mapping rule.  A global mapping rule is called whenever the identity is refreshed.  The rule can look at any account attributes.  An application mapping rule is called only when the identity contains an account link for that application, this link is passed in the "link" argument which is not passed in global mapping rules.</Description>
+	<Signature returnType="String">
+		<Inputs>
+			<Argument name="log">
+				<Description>
+          The log object associated with the SailPointContext.
+				</Description>
+			</Argument>
+			<Argument name="context">
+				<Description>
+          A sailpoint.api.SailPointContext object that can be used to query the database if necessary.
+				</Description>
+			</Argument>
+			<Argument name="environment" type="Map">
+				<Description>
+           Arguments passed to the aggregation or refresh task.
+				</Description>
+			</Argument>
+			<Argument name="identity">
+				<Description>
+           The Identity object that represents the user
+           that is being aggregated.
+				</Description>
+			</Argument>
+			<Argument name="attributeDefinition">
+				<Description>
+           The AttributeDefinition object for this attribute.
+				</Description>
+			</Argument>
+			<Argument name="link">
+				<Description>
+           The Link object from the Identity, if this is an application
+           mapping rule.  For global mapping rules this will be void.
+				</Description>
+			</Argument>
+			<Argument name="attributeSource">
+				<Description>
+          The AttributeSource object.
+				</Description>
+			</Argument>
+			<Argument name="oldValue">
+				<Description>
+          The original value of the application account attribute.
+				</Description>
+			</Argument>
+		</Inputs>
+		<Returns>
+			<Argument name="attributeValue">
+				<Description>
+          The value of the attribute that should be populated.
+          The rule should return this value.
+				</Description>
+			</Argument>
+		</Returns>
+	</Signature>
+	<Source><![CDATA[
+import sailpoint.api.IdentityService;
+import sailpoint.object.Application;
+
+// Setup custom logging because we always should...
+import org.apache.log4j.Logger;
+Logger  sislog = Logger.getLogger("com.sis.rule.identityType");
+// This rule can be lagged with this entry:  log4j.logger.com.sis.rule.identityType = <loglevel>
+
+// Some variable definitions, add/chage/tokenize as needed
+String employeeApplication = "%%Employee_HR_Application_Name%%";
+String aDApplication = "%%ADPROD_Application_Name%%";
+
+IdentityService ids = new IdentityService(context);
+
+// Using explicitly null-safe checks and operations (I hate NPEs...)
+// O365 is our internal employee reference (authoritative, and no contractor flag to use)
+sislog.debug("Checking for O365 links...");
+Application empApp = context.getObjectByName(Application.class, employeeApplication);
+if (empApp!=null && ids.getLinks(identity, empApp).size() > 0) {
+	sislog.debug("Found " + ids.getLinks(identity, empApp).size() + "Links.");
+	return "Employee";
+}
+
+// No O365 and has AD account - Assume service account (until further notice, still uncorrelated)
+sislog.debug("Did not find O365 link, checking for AD next...");
+Application aDApp = context.getObjectByName(Application.class, aDApplication);
+if (empApp!=null && ids.getLinks(identity, aDApp).size() > 0) {
+	sislog.debug("Found " + ids.getLinks(identity, aDApp).size() + "Links.");
+	return "AD Service/System Account";
+}
+
+// Catch-all classification...
+sislog.info("Did not find a link for any checked applications, defaulting to 'Unclassified'");
+return "Unclassified";
+]]>
+	</Source>
+</Rule>

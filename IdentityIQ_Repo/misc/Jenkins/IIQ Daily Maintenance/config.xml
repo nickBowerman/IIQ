@@ -1,0 +1,420 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<project>
+  <actions/>
+  <description></description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>-1</daysToKeep>
+        <numToKeep>5</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>App_Servers</name>
+          <description>Comma-separated list of app servers for the environment.  FQDNs preferred.</description>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>DeployUserName</name>
+          <description>Use domain account, will need to be in the format &apos;DOMAIN\Username&apos;</description>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.PasswordParameterDefinition>
+          <name>DeployUserPass</name>
+          <description>Password for the user account that will be used to perform actions on the DEV app servers</description>
+        </hudson.model.PasswordParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>TomcatWebappsDir</name>
+          <description>Folder on the app server where the war should be placed for staging the new WAR file and cleaning the old deployment.</description>
+          <defaultValue>D:\ProgramFiles\Apache\webapps</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>HoursToRetainFiles</name>
+          <description>Number of hours to keep temp files and logs (based on last modified date/time).  This should be a number only</description>
+          <defaultValue>12</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>zipCLIFilePath</name>
+          <description>Path to the 7zip CLI binary (used for more reliable zipping of old logs)</description>
+          <defaultValue>D:\tools\7zip\x64\7za.exe</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <scm class="hudson.scm.NullSCM"/>
+  <canRoam>true</canRoam>
+  <disabled>false</disabled>
+  <blockBuildWhenDownstreamBuilding>false</blockBuildWhenDownstreamBuilding>
+  <blockBuildWhenUpstreamBuilding>false</blockBuildWhenUpstreamBuilding>
+  <triggers>
+    <hudson.triggers.TimerTrigger>
+      <spec>0 13 * * *</spec>
+    </hudson.triggers.TimerTrigger>
+  </triggers>
+  <concurrentBuild>false</concurrentBuild>
+  <builders>
+    <hudson.plugins.powershell.PowerShell plugin="powershell@1.3">
+      <command>&lt;#
+ # This script performs some basic IIQ file maintenance
+ # (log archival and temp directory cleanup)
+ #&gt;
+$ErrorActionPreference = &quot;Stop&quot;
+
+#####     FUNCTION DEFINITIONS     #####
+
+# Function to remove all files in the given Path that have not been modified after the given date
+function Remove-FilesNotModifiedAfter {
+	param( 
+        [parameter(Mandatory)][ValidateScript({Test-Path $_})][string] $Path,
+		[ValidateNotNullOrEmpty()][ValidateScript({$_ -ge 0})][int]$HoursSinceLastWrite = 12, # default to 12 hours since list write
+        [switch]$DeleteEmptyFolders
+	)
+    # Get current date
+    $currentDateTime = Get-Date
+    Write-Host (&quot;Current Date: &quot; + $currentDateTime)
+    $hoursBack = (0 - $HoursSinceLastWrite)
+    Write-Host (&quot;Hours to go back: &quot; + $HoursSinceLastWrite)
+    # Set cutoff date.  Since we&apos;re going backwards, we need to flip the $HoursSinceLastWrite to a negative
+    $cutoffDateTime = $currentDateTime.AddHours($hoursBack)
+    Write-Host (&quot;Cutoff Date: &quot; + $cutoffDateTime)
+    # Var to set max threads for multithreading
+    $maxThreads = 0
+    foreach ($cpu in (Get-WmiObject -Class Win32_Processor -Property NumberOfLogicalProcessors)) {
+        # NumberOfCores,NumberOfLogicalProcessors
+        $maxThreads = $maxThreads + $cpu.NumberOfLogicalProcessors
+    }
+    # we will use the total number of logical processors seen by the OS *10 (to better expand the pipeline)
+    $maxThreads = $maxThreads * 10
+    Write-Host (&quot;Total number of threads that will be allocated for deletion: &quot; + $maxThreads)
+    # Get our objects to delete
+    Write-Host (&quot;Getting objects...&quot;)
+	#$objsToDelete = New-Object Collections.Generic.List[String]
+    $objsToDelete = New-Object System.Collections.ArrayList
+    try {
+        [void]$objsToDelete.AddRange( (Get-ChildItem -Path $Path -Recurse -Force -File | %{$_.FullName} | Where-Object -FilterScript {$_.LastWriteTime -lt $cutoffDateTime}) )
+	    Write-Host (&quot;Got multiple objects&quot;)
+    }
+    catch {
+        try {
+	        $singleFileCheck = ( (Get-ChildItem -Path $Path -Recurse -Force -File | %{$_.FullName} | Where-Object -FilterScript {$_.LastWriteTime -lt $cutoffDateTime}) )
+            if ($null -eq $singleFileCheck) {
+                Write-Host (&quot;No files to delete&quot;)
+            }
+            else {
+                [void]$objsToDelete.Add( (Get-ChildItem -Path $Path -Recurse -Force -File | %{$_.FullName} | Where-Object -FilterScript {$_.LastWriteTime -lt $cutoffDateTime}) )
+                Write-Host (&quot;Got single object&quot;)
+            }
+        }
+        catch {
+            Write-Host (&quot;Could not build list of files to clean&quot;)
+            Write-Host (&quot;Exception: &quot; + $_.Exception.Message)
+        }
+    }
+    ################### Write-Host (&quot;Total files: 877,650&quot;)
+    # Scriptblock defining the function to multithread
+    $deleteItemScriptBlock = {
+        param(
+            [int]$threadID,
+            [string]$filePath
+        )
+        $return = $false
+        try {
+            Remove-Item -Path $filePath -Force
+            # If above didn&apos;t throw an exception, update return
+            $return = $true
+        }
+        catch {
+            Write-Host (&quot;Could not delete file: &quot; + $filePath)
+            Write-Host (&quot;Exception: &quot; + $_.Exception.Message)
+        }
+        return $return
+    }
+    # Initialize PoSh multithreaded runspace
+    $runSpacePool = [RunspaceFactory]::CreateRunspacePool(
+        1,           # minimum number of threads
+        $maxThreads  # maximum number of threads
+    )
+    $runSpacePool.Open()
+    # ArrayList to track asyc job status for completion
+    $jobs = New-Object System.Collections.ArrayList
+    # Begin processing items to delete
+    $count = 0
+    # Write-Host (&quot;ObjToDelete Class: &quot; + $objsToDelete.getType().FullName)
+    # Write-Host (&quot;jobs Class: &quot; + $jobs.getType().FullName)
+    $objsToDeleteInitialSize = $objsToDelete.Count
+    Write-Host (&quot;Number of files to delete: &quot; + $objsToDeleteInitialSize)
+    if ($objsToDeleteInitialSize -gt 0) {
+        # Using a pure &apos;for&apos; loop so that we can remove items from the array as we process them
+        for ($i=0; $i -le $objsToDelete.Count; $i++) {
+            $file = $objsToDelete[$i]
+            $count++
+            # Now the fun of multithreaded execution and job management...
+            # Check to see if we&apos;ve assigned jobs to all our threads (runspaces)
+            # if so, see if any are completed so we can vacate the thread and assign a new job
+            # otherwise, take a brief snooze and check again
+            # Write-Host (&quot;Job Count: &quot; + $jobs.Count)
+            if ($jobs.Count -ge $runSpacePool.GetMaxRunspaces()) {
+                # Iterate our jobs array
+                # Write-Host (&quot;All runspaces occupied...&quot;)
+                do {
+                    # Again, using a pure &apos;for&apos; loop so that we can remove items from the array as we process them
+                    for ($j=0; $j -le $jobs.Count; $j++) {
+                        $thread = $jobs[$j]
+                        # If a job is complete, close process and remove it from the jobs array.
+                        # Write-Host (&quot;Thread Complete: &quot; + $thread.Result.IsCompleted)
+                        # Write-Host (&quot;Pipe: &quot; + $thread.Pipe)
+                        if ($thread.Result.IsCompleted -eq $true) {
+                            # Write-Host (&quot;Job complete, clearing runspace reference&quot;)
+                            [void]$thread.Pipe.EndInvoke($thread.Result)
+                            [void]$jobs.RemoveAt($j)
+                            # Since we removed an element from the jobs array (and decreased the array indexing accordingly,
+                            # We would normally need to decrement the loop counter $j, but since we only needed to make room
+                            # for a single new job to launch (and we did by removing an object from the $jobs array), 
+                            # it doesn&apos;t matter in this case as jobs will be removed on a first-come first-served bases
+                        }
+                    }
+                    # short sleep to help throttle CPU a smidge...
+                    # Start-Sleep -Milliseconds 1
+                }
+                while (!( $jobs.Count -lt $runSpacePool.GetMaxRunspaces() ))
+            }
+            # We have an available thread, launch the job
+            $threadID = [appdomain]::GetCurrentThreadId();
+            $job = [PowerShell]::Create().AddScript($deleteItemScriptBlock).AddParameter(&quot;threadID&quot;,$threadID).AddParameter(&quot;filePath&quot;,$file)
+            $job.RunspacePool = $runSpacePool
+            $task = New-Object PSObject -Property @{
+                Pipe = $job
+                Result = $job.BeginInvoke()
+            }
+            [void]$jobs.Add($task)
+            # Since we&apos;ve launched the delete job, we can remove the object from the original list to (hopefully) save some RAM
+            [void]$objsToDelete.RemoveAt($i)
+            # Since removing the object alterts the array indexing, we need to decrement our counter by 1 to compensate
+            # However, since our loop uses a &apos;-ge 0&apos;, we need to check the array count post-removal and *not* decrement if the array count is now 0
+            # Write-Host (&quot;ObjsToDelete Size: &quot; + $objsToDelete.Count)
+            if ($objsToDelete.Count -ne 0) {
+                $i--
+            }
+	    }
+        # Now that the file iteration loop is complete and all our jobs have been launched,
+        # clean up the runspace and close up the last remaining threads
+        do {
+            # short sleep to help throttle CPU a smidge...
+            # Start-Sleep -Milliseconds 1
+            for ($k=0; $k -le $jobs.Count; $k++) {
+                $finalThread = $jobs[$k]
+                if ($finalThread.Result.IsCompleted -eq $true) {
+                    # Write-Host (&quot;Job complete, clearing runspace reference&quot;)
+                    [void]$finalThread.Pipe.EndInvoke($finalThread.Result)
+                    [void]$jobs.RemoveAt($k)
+                    # Since we removed an element from the jobs array (and decreased the array indexing accordingly,
+                    # We would normally need to decrement the loop counter $k, but since we are reiterating the array
+                    # from the start at each cycle and $jobs.Count will decrease as a result, the loop will continue
+                    # until all jobs are completed and the $jobs array contains 0 elements
+                }
+            }
+        }
+        while($jobs.Count -gt 0)
+        # Now that all jobs have completed, we can close and dispose of the runspace pool to release the resource handles
+        $runspacePool.Close()
+        $runspacePool.Dispose()
+    }
+    Write-Host(&quot;Final count of file matches: &quot; + $count)
+    if ($DeleteEmptyFolders) {
+        Write-Host (&quot;DeleteEmptyFolders switch detected, cleaning out left-behind empty directories&quot;)
+        # clear our earlier arrays to be safe on memory
+        [void]$jobs.Clear()
+        [void]$objsToDelete.Clear()
+        Remove-EmptyDirectories -Path $Path
+    }
+}
+
+# function to remove any empty directories in a given Path, including those who may become empty after the Remove-FilesNotModifiedAfterDate has been executed
+# Since the number of empty folders should be significantly less than the number of files and proceed qickly, this can be single-threaded.
+function Remove-EmptyDirectories {
+	param(
+		[parameter(Mandatory)][ValidateScript({Test-Path $_})][string]$Path
+	)
+    $dirsToDelete = New-Object System.Collections.ArrayList
+    try {
+        [void]$dirsToDelete.AddRange( (Get-ChildItem -Path $Path -Recurse -Force -Directory | %{$_.FullName} | Where-Object -FilterScript {(Get-ChildItem -Path $_ -Recurse -Force -File) -eq $null}) )
+    }
+    catch {
+        try {
+            $checkDirsToDelete = (Get-ChildItem -Path $Path -Recurse -Force -Directory | %{$_.FullName} | Where-Object -FilterScript {(Get-ChildItem -Path $_ -Recurse -Force -File) -eq $null})
+            if ($null -eq $checkDirsToDelete) {
+                Write-Host (&quot;No empty folders found&quot;)
+            }
+            else {
+                [void]$dirsToDelete.Add( (Get-ChildItem -Path $Path -Recurse -Force -Directory | %{$_.FullName} | Where-Object -FilterScript {(Get-ChildItem -Path $_ -Recurse -Force -File) -eq $null}) )
+                Write-Host (&quot;Got single folder&quot;)
+            }
+        }
+        catch {
+            Write-Host (&quot;Could not populate list of directories to delete&quot;)
+            Write-Host (&quot;Exception:&quot; + $_.Exception.Message)
+        }
+    }
+    Write-Host (&quot;dirsToDelete Count: &quot; + $dirsToDelete.Count)
+    $emptyDirCount = 0
+    foreach ($dir in $dirsToDelete) {
+        Remove-Item -Path $dir -Force
+        $emptyDirCount++
+    }
+    Write-Host (&quot;Empty directories deleted: &quot; + $emptyDirCount)
+}
+
+# Function to archive and clean up log files
+function Archive-LogsNotModifiedAfter {
+	param( 
+        [parameter(Mandatory)][ValidateScript({Test-Path $_})][string] $Path,
+		[parameter(Mandatory)][string] $ArchivePath,
+		[parameter(Mandatory)][ValidateScript({Test-Path $_})][string] $CLIFilePath,
+		[ValidateNotNullOrEmpty()][ValidateScript({$_ -ge 0})][int]$HoursSinceLastWrite = 12 # default to 12 hours since list write
+	)
+    # Get current date
+    $currentDateTime = Get-Date
+    Write-Host (&quot;Current Date: &quot; + $currentDateTime)
+    $hoursBack = (0 - $HoursSinceLastWrite)
+    Write-Host (&quot;Hours to go back: &quot; + $HoursSinceLastWrite)
+    # Set cutoff date.  Since we&apos;re going backwards, we need to flip the $HoursSinceLastWrite to a negative
+    $cutoffDateTime = $currentDateTime.AddHours($hoursBack)
+    Write-Host (&quot;Cutoff Date: &quot; + $cutoffDateTime)
+	# Check for log archival directory, create if it doesn&apos;t exist
+	if (!(Test-Path -Path $ArchivePath)) {
+		# Archival directory does not exist, create it
+		Write-Host (&quot;Log archival directory not found, creating it...&quot;)
+		New-Item -Path $ArchivePath -ItemType Directory
+		Write-Host (&quot;Log archival directory created.&quot;)
+	}
+	# Build list of logs to archive and purge
+	$logsToArchive = New-Object System.Collections.ArrayList
+    try {
+        [void]$logsToArchive.AddRange( (Get-ChildItem -Path $Path -Recurse -Force -File | %{$_.FullName} | Where-Object -FilterScript {$_.LastWriteTime -lt $cutoffDateTime}) )
+	    Write-Host (&quot;Got multiple objects&quot;)
+    }
+    catch {
+        try {
+	        $singleFileCheck = ( (Get-ChildItem -Path $Path -Recurse -Force -File | %{$_.FullName} | Where-Object -FilterScript {$_.LastWriteTime -lt $cutoffDateTime}) )
+            if ($null -eq $singleFileCheck) {
+                Write-Host (&quot;No files to delete&quot;)
+            }
+            else {
+                [void]$logsToArchive.Add( (Get-ChildItem -Path $Path -Recurse -Force -File | %{$_.FullName} | Where-Object -FilterScript {$_.LastWriteTime -lt $cutoffDateTime}) )
+                Write-Host (&quot;Got single object&quot;)
+            }
+        }
+        catch {
+            Write-Host (&quot;Could not build list of files to clean&quot;)
+            Write-Host (&quot;Exception: &quot; + $_.Exception.Message)
+        }
+    }
+	# For simplicity, we will temporarily move the log files to a temp folder, zip them, then delete them and the temp folder
+	$logsTempDir = $Path + &quot;\logsTemp&quot;
+	if (!(Test-Path -Path $logsTempDir)) {
+		Write-Host (&quot;Creating temp log archival/purge folder&quot;)
+		New-Item -Path $logsTempDir -ItemType Directory
+		Write-Host (&quot;Temp log archival/purge folder created.&quot;)
+	}
+	# Move logs to temp directory
+	foreach ($file in $logsToArchive) {
+		try {
+			Move-Item -Path $file -Destination $logsTempDir -Force
+		}
+		catch {
+			Write-Host (&quot;Could not move file &quot; + $file )
+			Write-Host (&quot;Exception: &quot; + $_.Exception.Message)
+		}
+	}
+	# Perform log zipping
+	Write-Host (&quot;Archiving old logs...&quot;)
+	# TODO:  Refactor this to use the 7zip CLI
+	try {
+		# Have to back-convert the mapped drive to resolve the full path
+		$srcDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($logsTempDir)
+		# $srcDir = $logsTempDir
+		$destZip = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ArchivePath + &quot;\logs_archive_&quot; + $datestamp + &quot;.zip&quot;)
+		# $destZip = ($ArchivePath + &quot;\logs_archive_&quot; + $datestamp + &quot;.zip&quot;)
+		$fullTempDirPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($logsTempDir)
+		$cmd = (&apos;&amp; &quot;&apos; + $CLIFilePath + &apos;&quot; a -tzip &quot;&apos; + $destZip + &apos;&quot; &quot;&apos; + $fullTempDirPath + &apos;\*&quot;&apos;)
+		Write-Host (&quot;PoSh command: powershell.exe -ExecutionPolicy Bypass &quot; + $cmd)
+		$res = powershell.exe -ExecutionPolicy Bypass $cmd
+		Write-Host (&quot;Result: &quot; + $res)
+		$zipSuccessful = $false
+		foreach ($line in $res) {
+			if (($line.Trim().Length -gt 0) -and ($line.Trim().ToLower().Equals(&quot;Everything is Ok&quot;.ToLower()))) {
+				$zipSuccessful =  $true
+				Write-Host (&quot;Log archival successful&quot;)
+			}
+		}
+		if (!($zipSuccessful)) {
+			Write-Host (&quot;Log archival failed&quot;)
+		}
+	}
+	catch {
+		# Archival failed, catch the exception and make a note but continue the rest of the process
+		Write-Host (&quot;An error occurred when attempting to archive old logs.&quot;)
+		Write-Host (&quot;Exception: &quot; + $_.Exception.Message)
+		Write-Host (&quot;Inner Exception: &quot; + $_.Exception.InnerException)
+	}	
+	# Clean up temp log stash and directory
+	if (Test-Path -Path $logsTempDir) {
+		Write-Host (&quot;Removing temp log archival/purge folder&quot;)
+		Get-ChildItem -Path $logsTempDir -Recurse | Remove-Item -Force
+		Remove-Item -Path $logsTempDir -Force
+		Write-Host (&quot;Temp log archival/purge folder removed.&quot;)
+	}
+}
+
+#####     MAIN ACTION SECTION     #####
+
+$apacheDir = (($env:TomcatWebappsDir).Replace(&quot;\webapps&quot;,&quot;&quot;))
+$logsDir = &quot;logs&quot;
+$logsArchiveDir = &quot;old_logs&quot;
+$tempDir = &quot;temp&quot;
+$datestamp = Get-Date -Format yyyy-MM-dd
+$appServers = [System.Collections.ArrayList]@(($env:App_Servers).split(&quot;,&quot;))
+$hrsToGoBack = [int]$env:HoursToRetainFiles
+$remoteCreds = New-Object System.Management.Automation.PSCredential($env:DeployUserName,(ConvertTo-SecureString -String $env:DeployUserPass -AsPlainText -Force))
+$zipCLILocation = $env:zipCLIFilePath
+
+foreach ($srv in $appServers) {
+	# Map SMB share to Tomcat directory
+	$mappedDestPart = $apacheDir.Replace(&apos;D:\&apos;,&quot;&quot;)
+	$mappedDest = (&apos;\\&apos; + $srv + &apos;\D$\&apos; + ($mappedDestPart))
+	Write-Host (&quot;Set destination: &quot; + ($mappedDest))
+	Write-Host (&quot;Mapping remote destination &quot; + $srv + &quot; to local &apos;T&apos;&quot;)
+	New-PSDrive –Name &quot;T&quot; –PSProvider FileSystem –Root $mappedDest # -Credential $remoteCreds
+	Write-Host (&quot;Remote destination &quot; + $srv + &quot; successfully mapped to local &apos;T&apos;&quot;)
+	$mappedDestDir = (&apos;T:\&apos;)
+	# Begin log and temp management....
+	$start = Get-Date
+	Write-Host (&quot;Start: &quot; + $start )
+	$logsFilePath = $mappedDestDir + $logsDir
+	$logsArchivePath = $mappedDestDir + $logsArchiveDir
+	$tempFilePath = $mappedDestDir + $tempDir
+	# TODO:  Parameterize this
+	Remove-FilesNotModifiedAfter -Path $tempFilePath -HoursSinceLastWrite $hrsToGoBack -DeleteEmptyFolders
+	Archive-LogsNotModifiedAfter -Path $logsFilePath -ArchivePath $logsArchivePath -CLIFilePath $zipCLILocation -HoursSinceLastWrite $hrsToGoBack
+	$end = Get-Date
+	Write-Host (&quot;End: &quot; + $end )
+	$time = New-TimeSpan -Start $start -End $end
+	Write-Host (&quot;Total Run: &quot; + $time)	
+	# Unmap the SMB share/drive
+	Write-Host (&quot;Disconnecting from SMB drive...&quot;)
+	Remove-PSDrive –PSProvider FileSystem -Name &quot;T&quot;
+	Write-Host (&quot;SMB drive disconnection complete.&quot;)
+}</command>
+    </hudson.plugins.powershell.PowerShell>
+  </builders>
+  <publishers/>
+  <buildWrappers/>
+</project>

@@ -1,0 +1,180 @@
+//Support for AWS CredentialProvider
+buildscript { 
+    repositories { 
+        mavenCentral() 
+    } 
+
+    dependencies { 
+        classpath 'com.amazonaws:aws-java-sdk:1.10.58' 
+    } 
+}
+
+import com.amazonaws.auth.DefaultAWSCredentialsProviderChain
+
+apply plugin: 'maven-publish'
+
+//Get IIQ Version info from the build.properties file
+if (!binding.variables.containsKey("host"))
+	ext.hostname = java.net.InetAddress.getLocalHost().getHostName();
+
+// Update to also handle the new SPTARGET.build.properties format (and others)...
+def SPTARGET = System.getenv('SPTARGET')
+if(SPTARGET)
+	println("Found SPTARGET: " + SPTARGET)
+
+// Set initial File to the default build.properties, then update with env-specifiv file if found...
+File buildPropsFile = new File("build.properties")
+// "resources/build.properties."+hostname);
+if (new File("resources/" + SPTARGET + ".build.properties").exists()) {
+	println("resources/" + SPTARGET + ".build.properties found");
+	buildPropsFile = new File("resources/" + SPTARGET + ".build.properties")
+}
+else if (new File("resources/build.properties." + SPTARGET).exists()) {
+	println("resources/build.properties." + SPTARGET + " found");
+	buildPropsFile = new File("resources/build.properties." + SPTARGET)
+}
+else if (new File("resources/build.properties." + hostname).exists()) {
+	println("resources/build.properties." + hostname + " found");
+	buildPropsFile = new File("resources/build.properties." + hostname)
+}
+else if (new File("resources/build.properties." + hostname).exists()) {
+	println("resources/build.properties." + hostname + " found");
+	buildPropsFile = new File("resources/build.properties." + hostname)
+}
+else {
+	println("Could not locate env-specific build.properties file, using default");
+}
+
+println "Using " + buildPropsFile.getName() + " to detect IIQ Version"
+FileInputStream fileInput = new FileInputStream(buildPropsFile)
+Properties buildProps = new Properties();
+buildProps.load(fileInput);
+fileInput.close();
+
+def IIQVersion = buildProps.getProperty('IIQVersion')
+def IIQPatchLevel = buildProps.getProperty('IIQPatchLevel')
+def IIQVersionName = IIQVersion + IIQPatchLevel;
+
+println "IIQVersion: " + IIQVersion
+println "IIQPatchLevel: " + IIQPatchLevel
+println "IIQVersionName: " + IIQVersionName 
+
+//Configure Dependencies
+repositories {
+    maven {
+        url "s3://maven.lab.secureitsource.com"
+        credentials(AwsCredentials) {
+
+            def defaultCredentials = new DefaultAWSCredentialsProviderChain().getCredentials()
+            accessKey defaultCredentials.getAWSAccessKeyId()
+            secretKey defaultCredentials.getAWSSecretKey()
+        }
+		metadataSources {
+            mavenPom()
+            artifact()
+        }
+    }
+    mavenCentral()
+}
+
+configurations {
+    // lib/ (Build libraries)
+    lib 
+    
+    // base/ (IIQ release and patches)
+    ga
+    patch
+    efix
+    
+    // web/WEB-INF/lib (Additional jars for IIQ)
+    web
+    
+}
+dependencies {
+   lib 'sailpoint:services-tools:6.1.0'
+   lib 'ant-contrib:ant-contrib:1.0b3'
+   lib 'org.apache.tomcat:tomcat-catalina-ant:7.0.14'
+
+   ga group: 'sailpoint', name: 'identityiq', version: IIQVersion,ext: 'zip'
+}
+
+//Dynamic dependencies
+if(IIQPatchLevel != null && !IIQPatchLevel.isEmpty())
+	dependencies.add('patch','sailpoint:identityiq:'+IIQVersionName);
+
+
+//Copy Dependencies Necessary for the build
+copy {
+	from configurations.lib
+	into 'lib/'
+	rename "services-tools-.*\\.jar",'services-tools.jar'
+	rename "catalina-ant-.*\\.jar",'catalina-ant.jar'
+}
+
+//Import build.xml Ant targets
+ant.importBuild('build.xml')
+
+//Build Tasks
+task createDirectories{
+	def DIRECTORIES = Arrays.asList("base/","base/ga/","base/patch/","base/efix/"+IIQVersionName+"/");
+	println "Checking for required directories..."
+	for(String dir : DIRECTORIES){
+		File fdir = new File(dir);
+		if(!fdir.exists())
+			println "Base directory " + dir + " does not exist. Creating"
+			fdir.mkdir();
+	}
+}	
+task copyGA(type: Copy){
+    from configurations.ga
+    into 'base/ga'
+}
+task copyPatch(type: Copy){
+    from configurations.patch
+    into 'base/patch'
+}
+task copyEfix(type: Copy){
+    from configurations.efix
+    into 'base/efix/'+IIQVersionName+'/'
+}
+task copyBase{
+    dependsOn createDirectories
+    dependsOn copyGA    
+    dependsOn copyPatch
+    dependsOn copyEfix
+}
+
+task copyWeb(type: Copy){
+    from configurations.web
+    into 'web/WEB-INF/lib/'
+}
+
+main.dependsOn copyBase
+main.dependsOn copyWeb
+
+//Publish War to Maven
+publishing {
+    publications {
+        iiqWar(MavenPublication) {
+            artifact ('build/deploy/identityiq.war')
+            groupId IIQ_PUBLISH_GROUPID
+            artifactId IIQ_PUBLISH_ARTIFACTID
+            version IIQ_PUBLISH_VERSION
+        }
+    }
+}
+publishing {
+    repositories {
+        maven {
+	        url "s3://maven.lab.secureitsource.com"
+    	    credentials(AwsCredentials) {
+
+            def defaultCredentials = new DefaultAWSCredentialsProviderChain().getCredentials()
+            accessKey defaultCredentials.getAWSAccessKeyId()
+            secretKey defaultCredentials.getAWSSecretKey()
+        }
+       }
+    }
+}
+
+publish.dependsOn war

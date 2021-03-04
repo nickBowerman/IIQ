@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE QuickLink PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<QuickLink action="external" category="Custom" messageKey="IIQ Debug Pages" name="IIQ Debug Pages">
+  <Attributes>
+    <Map>
+      <entry key="displayText" value="true"/>
+      <entry key="url" value="./debug/"/>
+    </Map>
+  </Attributes>
+  <QuickLinkOptions allowSelf="true">
+    <DynamicScopeRef>
+      <Reference class="sailpoint.object.DynamicScope" name="IIQ Admins"/>
+    </DynamicScopeRef>
+  </QuickLinkOptions>
+</QuickLink>

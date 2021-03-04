@@ -1,0 +1,86 @@
+#required properties
+IIQVersion=7.2
+IIQPatchLevel=
+#application server iiq home
+customer=secureITSourceLABS
+jdk.home.1.6=C:/Program Files/Java/jdk1.8.0_121
+runCustomScripts=true
+
+# Deploy SSF Frameworks and Features
+#deploySSF=false
+
+# Deploy SSF Tools
+#deployGenericImporter=true
+#deployObjectExporter=true
+#deployMultiThreadedBeanShellKit=true
+#deployReportExtractor=true
+#deployRuleRunnerTask=true
+#deployEmailApprovals=false
+#deployBreakGlass=false
+
+# Deploy SST Testing Tools
+#deploySSTUnitTester=false
+
+# Deploy SSP Performance Tools
+#deploySSPTools=false
+
+
+#make sure any app server specific env variables,like CATALINA_HOME for tomcat, are set on your system
+# Since the repo and build are being done on the jumphost and manually deployed to the app server(s),
+# The IIQHome and app server properties are irrelevant (for now).
+#IIQHome=c:/dev/tomcat/webapps/iiq
+#application.server.host=localhost
+#application.server.port=8080
+#application.server.start=c:/dev/tomcat/bin/startup.bat
+#application.server.stop=c:/dev/tomcat/bin/shutdown.bat
+db.url=jdbc:mysql://10.20.50.1?useServerPrepStmts=true&tinyInt1isBit=true&useUnicode=true&characterEncoding=utf8
+db.userid=admin
+db.password=1:unEm07eAkV+YzL4QrhOdlw==
+db.driver=com.mysql.jdbc.Driver
+iiq.path=/iiq/login.jsf
+#type must be db2,mysql,oracle,sqlserver
+db.type=mysql
+db.name=identityiq
+
+#information on the user account that will be created using the DB script 
+db.userName=identityiq
+db.userPassword=1:unEm07eAkV+YzL4QrhOdlw==
+
+# sqlserver has an additional item created in the script for the Login name, which is separate from the user name. Specify that here
+#db.sqlserver.loginName=sqlLoginName
+
+# db2 requires a separate DB name for its scripts and file/bufferpool. Specify those here
+#db.db2.databaseName=db2dbName
+#db.db2.bufferpool=db2bufferpool
+#db.db2.tableSpaceName=db2tableSpaceName
+
+# For the createdb/dropdb scripts and Oracle, we have the option to uncomment the lines that create 
+# the tablespace and user, as well as removing them. These variables need to be set to enable that
+#db.oracle.createUser=true
+#db.oracle.createTableSpace=true
+#db.oracle.tableSpaceName=ssbtest
+#db.oracle.tableSpacePath=/home/oracle/app/oracle/oradata/ssbtest.dbf
+#db.oracle.useFastDropScript=false
+
+installJavaMelody=true
+#set this to true if you make test scripts that call targets with user warnings like drop db etc.
+override.safety.prompts=false
+#for export, the original install date string that we can use to determine new or changed objects
+installDate=3/17/17 14:48:58 PM CDT
+
+#tomcat properties. You only need to set these if you have a CATALINA_HOME env var set
+#NOTE: for tomcat 7+ the manager url is /manager/text for 6 and lower its just /manager
+#You will also need to setup a manager-script user in your tomcat user config, check out
+#http://tomcat.apache.org/tomcat-7.0-doc/manager-howto.html#Executing_Manager_Commands_With_Ant
+#manager.url=http://localhost:8080/manager/text
+#manager.login=tomcat
+#manager.pw=tomcat
+#tomcat.home=c:/dev/tomcat
+
+# If Lifecycle Manager is required you can have it included in the init.xml by setting usingLcm to true (i.e. usingLcm=true)
+usingLcm=true
+
+# Username and encrypted password used by importdynamic to access the console.
+# This can be removed, in which case the user will be prompted for credentials.
+#console_user=spadmin
+#console_pass=1:p+qvPBo4Rig8PYlNWbr3Zg==

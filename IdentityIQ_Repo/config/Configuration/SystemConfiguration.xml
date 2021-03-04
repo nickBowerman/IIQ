@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE sailpoint PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<sailpoint>
+	<ImportAction name="merge">
+		<Configuration name="SystemConfiguration">
+			<Attributes>
+				<Map>
+					<entry key="quickLinkCategories">
+						<value>
+							<List>
+								<QuickLinkCategory cssClass="quickLinkCategoryTasks" messageKey="quicklink_category_all_tasks" name="Tasks" ordering="1"/>
+								<QuickLinkCategory cssClass="quickLinkCategoryAccess" messageKey="quicklink_category_access" name="Access" ordering="2"/>
+								<QuickLinkCategory cssClass="quickLinkCategoryManage" messageKey="quicklink_category_manage" name="Manage" ordering="3"/>
+								<QuickLinkCategory cssClass="quickLinkCategoryCustom" enabled="true" messageKey="quicklink_category_custom" name="Custom" ordering="4"/>
+							</List>
+						</value>
+					</entry>
+					<entry key="loginPassThrough">
+						<value>
+							<List>
+								<Reference class="sailpoint.object.Application" name="%%ADPROD_Application_Name%%"/>
+							</List>
+						</value>
+					</entry>
+				</Map>
+			</Attributes>
+		</Configuration>
+	</ImportAction>
+</sailpoint>

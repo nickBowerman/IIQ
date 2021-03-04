@@ -1,0 +1,100 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Rule PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Rule language="beanshell" name="IdentityAttributeTarget.ManagerTargetDN" type="IdentityAttributeTarget">
+  <Description>Identity attribute target rules are used to tranform identity attribute values that are being pushed to targets.</Description>
+  <Signature returnType="Object">
+    <Inputs>
+      <Argument name="log">
+        <Description>
+          The log object associated with the SailPointContext.
+        </Description>
+      </Argument>
+      <Argument name="context">
+        <Description>
+          A sailpoint.api.SailPointContext object that can be used to query the database if necessary.
+        </Description>
+      </Argument>
+      <Argument name="value" type="Object">
+        <Description>
+           The value of the identity attribute.  Note that this could be single value or a list of values.
+        </Description>
+      </Argument>
+      <Argument name="sourceIdentityAttribute">
+        <Description>
+           The sailpoint.object.ObjectAttribute for this target.
+        </Description>
+      </Argument>
+      <Argument name="sourceIdentityAttributeName">
+        <Description>
+           The name of the identity attribute for this target.
+        </Description>
+      </Argument>
+      <Argument name="sourceAttributeRequest">
+        <Description>
+           The sailpoint.object.ProvisioningPlan.AttributeRequest that is
+           setting the attribute on the identity.
+        </Description>
+      </Argument>
+      <Argument name="target">
+        <Description>
+           The sailpoint.object.AttributeTarget that is being processed.
+        </Description>
+      </Argument>
+      <Argument name="identity">
+        <Description>
+           The sailpoint.object.Identity that is being processed.
+        </Description>
+      </Argument>
+      <Argument name="project">
+        <Description>
+           The sailpoint.object.ProvisioningProject that has the changes that
+           are being requested.
+        </Description>
+      </Argument>
+    </Inputs>
+    <Returns>
+      <Argument name="attributeValue">
+        <Description>
+          The transformed value that will be pushed to the target.
+        </Description>
+      </Argument>
+    </Returns>
+  </Signature>
+	<Source><![CDATA[
+import sailpoint.api.IdentityService;
+import sailpoint.object.Application;
+import sailpoint.object.Identity;
+
+// Setup custom logging because we always should...
+import org.apache.log4j.Logger;
+Logger sislog = Logger.getLogger("com.sis.rule.ManagerTargetDN");
+// This rule can be lagged with this entry:  log4j.logger.com.sis.rule.ManagerTargetDN = <loglevel>
+
+// Some variable definitions, add/chage/tokenize as needed
+String aDApplication = "%%ADPROD_Application_Name%%";
+Identity mgr = identity.getManager();
+
+IdentityService ids = new IdentityService(context);
+
+// Using explicitly null-safe checks and operations (I hate NPEs...)
+sislog.debug("Attempting to determine manager's AD account DN (Assumes only one AD Account...");
+Application aDApp = context.getObjectByName(Application.class, aDApplication);
+if (mgr!=null) {
+	if (aDApp!=null && (ids.getLinks(mgr, aDApp)).size() == 1) {
+		sislog.debug("Found " + ids.getLinks(mgr, aDApp).size() + "Links.");
+		// Probably not as null-safe as it should be...
+		String adDN = ids.getLinks(mgr, aDApp).get(0).getNativeIdentity();
+		sislog.debug("Discovered AD DN: " + adDN);
+		return adDN;
+	} else {
+		// Unknown - has 0 or more than 1 AD account...
+		// IIQ is null-safe, right?
+		sislog.info("Manager " + mgr.getName() + " has 0 or multiple AD account(s).");
+		return null;
+	}
+}
+sislog.info("Identity " + identity.getName() + " did not have a manager.");
+return null;
+]]>
+	</Source>
+</Rule>
